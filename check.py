@@ -1,13 +1,17 @@
 """
-Version GitHub Actions : chaque lancement fait 3 vérifications (t=0, 2, 4 min)
-des 2 pages de vente Opening Session Verbier, puis s'arrête.
-Le workflow se relance toutes les 5 min => ~1 vérification / 2 min.
-Le nom du topic ntfy vient du secret GitHub NTFY_TOPIC.
+Surveille les 2 pages de vente Opening Session Verbier (GitHub Actions).
+Deux sessions par jour, lancées par le workflow :
+  - session du matin     : démarre ~7h17, tourne jusqu'à 12h30 (heure suisse)
+  - session de l'après-midi : démarre ~11h47, tourne jusqu'à 17h30
+Vérification toutes les 60 s. Le nom du topic ntfy vient du secret NTFY_TOPIC.
 """
 
 import os
 import sys
 import time
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
 import requests
 
 TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
@@ -18,9 +22,31 @@ PAGES = {
     "Billet + train": "https://verbier4vallees.ch/en/online-shop/activities/opening-session-st.nicholas-express_activity_426820",
 }
 
-PASSES = 3            # nombre de vérifications par lancement
-PAUSE_SECONDES = 120  # 2 minutes entre chaque
+# ====== REGLAGES ======
+PAUSE = 60          # secondes entre 2 vérifications
+RENOTIF = 180       # secondes mini entre 2 alertes pour une même page
+FIN_MATIN = (12, 30)
+FIN_APREM = (17, 30)
+# ======================
+
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; verbier-watch)"}
+TZ = ZoneInfo("Europe/Zurich")
+
+
+def maintenant():
+    return datetime.now(TZ)
+
+
+def heure_de_fin(t):
+    """Choisit l'heure de fin de session selon l'heure de démarrage."""
+    h = t.hour + t.minute / 60
+    if 7.0 <= h < 11.5:
+        hh, mm = FIN_MATIN
+    elif 11.5 <= h < 17.5:
+        hh, mm = FIN_APREM
+    else:
+        return t + timedelta(minutes=15)  # lancement manuel hors horaires : session courte
+    return t.replace(hour=hh, minute=mm, second=0, microsecond=0)
 
 
 def notifier(titre, message, lien=None):
@@ -46,25 +72,38 @@ def main():
     if not TOPIC:
         sys.exit("Secret NTFY_TOPIC manquant : ajoute-le dans Settings > Secrets > Actions.")
 
+    fin = heure_de_fin(maintenant())
+    print(f"Session démarrée à {maintenant():%H:%M}, fin prévue à {fin:%H:%M} (heure suisse).")
+
     if TEST:
         notifier("Verbier : test", "Test OK, les notifications fonctionnent.",
                  list(PAGES.values())[0])
         print("Notification de test envoyée.")
 
-    for i in range(PASSES):
+    derniere_alerte = {}
+
+    while True:
         for nom, url in PAGES.items():
             try:
                 ouvert = est_ouvert(url)
             except Exception as e:
-                print(f"{nom} : erreur {e}")
+                print(f"[{maintenant():%H:%M:%S}] {nom} : erreur {e}")
                 continue
+
             etat = "OUVERT !" if ouvert else "fermé" if ouvert is False else "page illisible"
-            print(f"[{time.strftime('%H:%M:%S')}] {nom} : {etat}")
-            if ouvert is True:
+            print(f"[{maintenant():%H:%M:%S}] {nom} : {etat}")
+
+            if ouvert is True and time.time() - derniere_alerte.get(nom, 0) >= RENOTIF:
                 notifier(f"Verbier 5 CHF : {nom}",
                          f"{nom} : des billets sont en vente ! Fonce.", url)
-        if i < PASSES - 1:
-            time.sleep(PAUSE_SECONDES)
+                derniere_alerte[nom] = time.time()
+
+        sys.stdout.flush()
+        if TEST or maintenant() + timedelta(seconds=PAUSE) >= fin:
+            break
+        time.sleep(PAUSE)
+
+    print("Session terminée.")
 
 
 if __name__ == "__main__":
