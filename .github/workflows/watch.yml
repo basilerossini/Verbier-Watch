@@ -1,20 +1,18 @@
 name: verbier-watch
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "17 6 * * *"    # 07h17 heure suisse (hiver) : session du matin
+    - cron: "47 10 * * *"   # 11h47 heure suisse (hiver) : session de l'après-midi
   workflow_dispatch:
     inputs:
       test:
         description: "Envoyer une notification de test"
         type: boolean
         default: false
-concurrency:
-  group: verbier-watch
-  cancel-in-progress: false
 jobs:
   watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 7
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
